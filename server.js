@@ -7,21 +7,109 @@ require("dotenv").config();
 const app = express();
 
 // ✅ Enable CORS for your domain
-app.use(cors({
-    origin: ["http://skillang.com", "https://skillang.com"],
-    credentials: true
-}));
+app.use(cors({ origin: "*", credentials: true }));
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// ✅ Connect to MongoDB
-mongoose.connect(process.env.MONGO_URI || "mongodb://127.0.0.1:27017/skillang", {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
+const { GoogleSpreadsheet } = require("google-spreadsheet");
+const { JWT } = require("google-auth-library");
+const fs = require("fs");
+
+
+// ✅ Replace with your Google Sheet ID
+const SHEET_ID = "1Xp_IEXsq1pyo_u6-1We38P0auFdXu4-lKChH6sS2iwk";
+
+// ✅ Load Google Service Account Credentials
+console.log("📂 Loading Google Service Account Credentials...");
+let CREDENTIALS;
+try {
+    CREDENTIALS = JSON.parse(fs.readFileSync("skillang-database-2d497fab2a4f.json", "utf8"));
+    console.log("✅ Credentials loaded successfully!");
+} catch (error) {
+    console.error("❌ ERROR: Failed to load credentials file:", error);
+    process.exit(1); // Stop the server if credentials are missing
+}
+
+// ✅ Authenticate Using google-auth-library
+const serviceAccountAuth = new JWT({
+    email: CREDENTIALS.client_email,
+    key: CREDENTIALS.private_key.replace(/\\n/g, "\n"), // Fixes private key formatting issue
+    scopes: ["https://www.googleapis.com/auth/spreadsheets"],
 });
 
-mongoose.connection.on("connected", () => console.log("✅ MongoDB connected successfully"));
-mongoose.connection.on("error", (err) => console.error("❌ MongoDB connection error:", err));
+// ✅ New Endpoint to Send Data to Google Sheets
+app.post("/submit-to-google-sheets", async (req, res) => {
+    try {
+        console.log("📩 Received request at /submit-to-google-sheets");
+
+        const { name, email, phone, pincode, lookingFor, experience } = req.body;
+
+        // ✅ Validate Data
+        const missingFields = [];
+        if (!name) missingFields.push("Name");
+        if (!email) missingFields.push("Email");
+        if (!phone) missingFields.push("Phone");
+        if (!pincode) missingFields.push("Pincode");
+        if (!lookingFor) missingFields.push("LookingFor");
+
+        if (missingFields.length > 0) {
+            console.error("❌ Validation Error: Missing fields:", missingFields);
+            return res.status(400).json({
+                success: false,
+                message: `Missing required fields: ${missingFields.join(", ")}`,
+            });
+        }
+
+        console.log("✅ All required fields are present. Proceeding...");
+
+        // ✅ Get current time in IST
+        const options = { timeZone: "Asia/Kolkata", hour12: false };
+        const now = new Date().toLocaleString("en-GB", options).replace(",", ""); // DD/MM/YYYY HH:mm:ss format
+        const formattedTime = now.replace(/\//g, "-"); // Convert to DD-MM-YYYY HH:mm:ss
+
+        // ✅ Connect to Google Sheets
+        console.log("📂 Initializing Google Sheets connection...");
+        const doc = new GoogleSpreadsheet(SHEET_ID, serviceAccountAuth);
+        await doc.loadInfo();
+        console.log(`✅ Spreadsheet loaded: ${doc.title}`);
+
+        const sheet = doc.sheetsByIndex[0]; // First sheet
+        console.log(`📄 Found sheet: ${sheet.title}`);
+
+        // ✅ Append new row with data
+        console.log("📤 Adding data to Google Sheets...");
+        await sheet.addRow({
+            Name: name,
+            Email: email,
+            Phone: phone,
+            Pincode: pincode,
+            LookingFor: lookingFor,
+            Experience: experience || "", // If experience exists, store it; otherwise, leave empty
+            Timestamp: formattedTime, // ✅ Add timestamp column
+        });
+
+        console.log("✅ Data added successfully!");
+        res.json({ success: true, message: "Data submitted successfully" });
+
+    } catch (error) {
+        console.error("❌ Server Error:", error);
+        res.status(500).json({ success: false, message: "Server Error: Try again later", error: error.message });
+    }
+});
+
+
+
+
+
+// // ✅ Connect to MongoDB
+// mongoose.connect(process.env.MONGO_URI || "mongodb+srv://admin:0uomUdTBahyzrjOj@cluster0.mongodb.net/skillang_data?retryWrites=true&w=majority", {
+//     useNewUrlParser: true,
+//     useUnifiedTopology: true,
+// });
+
+// mongoose.connection.on("connected", () => console.log("✅ MongoDB connected successfully"));
+// mongoose.connection.on("error", (err) => console.error("❌ MongoDB connection error:", err));
 
 // ✅ Define Schema & Model
 const InquirySchema = new mongoose.Schema({
@@ -95,15 +183,16 @@ app.post("/verify-otp", (req, res) => {
 });
 
 // ✅ Handle Form Submission
+
 app.post("/submit-inquiry", async (req, res) => {
     try {
         console.log("📩 Received Data:", req.body);
-        const inquiry = new Inquiry(req.body);
-        await inquiry.save();
+        // const inquiry = new Inquiry(req.body);
+        //         await inquiry.save(); MongoDB code is commented out, so just return success
         res.json({ message: "✅ Inquiry submitted successfully!" });
     } catch (error) {
-        console.error("❌ Error Saving Inquiry:", error);
-        res.status(500).json({ message: "❌ Error saving inquiry", error });
+        console.error("❌ Error Handling Inquiry:", error);
+        res.status(500).json({ message: "❌ Server Error", error });
     }
 });
 
